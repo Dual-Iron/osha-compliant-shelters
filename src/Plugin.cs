@@ -22,7 +22,7 @@ sealed class Plugin : BaseUnityPlugin
     const int startSleep = 20;
 
     sealed class PlayerData { public int sleepTime; public bool forceSleep; }
-    sealed class RegionData { public readonly Dictionary<int, IntVector2> entPositions = new(); };
+    sealed class RegionData { public readonly Dictionary<int, Vector2[]> chunkPositions = new(); };
 
     static readonly ConditionalWeakTable<Player, PlayerData> players = new();
     static readonly ConditionalWeakTable<RegionState, RegionData> regions = new();
@@ -293,7 +293,7 @@ sealed class Plugin : BaseUnityPlugin
 
             self.unrecognizedSaveStrings.RemoveAt(s);
 
-            string[] entries = split[1].Split(new char[] { ')' }, System.StringSplitOptions.RemoveEmptyEntries);
+            string[] entries = split[1].Split(new char[] { ')' }, StringSplitOptions.RemoveEmptyEntries);
 
             foreach (string entry in entries) {
                 string[] entrySplit = entry.Split('(');
@@ -303,9 +303,20 @@ sealed class Plugin : BaseUnityPlugin
                     continue;
                 }
 
-                string[] xy = entrySplit[1].Split(',');
+                string[] positions = entrySplit[1].Split(new char[] { ';' } ,StringSplitOptions.RemoveEmptyEntries);
 
-                data.entPositions[id] = new(int.Parse(xy[0]), int.Parse(xy[1]));
+                data.chunkPositions[id] = new Vector2[positions.Length];
+
+                for (int i = 0; i < positions.Length; i++) {
+                    string[] xy = positions[i].Split(',');
+                    
+                    if (int.TryParse(xy[0], out int x) && int.TryParse(xy[1], out int y)) {
+                        data.chunkPositions[id][i] = new(x * 0.0001f, y * 0.0001f);
+                    }
+                    else {
+                        Logger.LogWarning($"X and Y coordinate saved incorrectly: {positions[i]}");
+                    }
+                }
             }
         }
     }
@@ -313,12 +324,16 @@ sealed class Plugin : BaseUnityPlugin
     private string SavePositions(On.RegionState.orig_SaveToString orig, RegionState self)
     {
         StringBuilder save = new("ENTITYPOSITIONS<rgB>");
-        foreach (var ent in regions.GetValue(self, _ => new()).entPositions) {
+        foreach (var ent in regions.GetValue(self, _ => new()).chunkPositions) {
             save.Append(ent.Key);
             save.Append("(");
-            save.Append(ent.Value.x);
-            save.Append(",");
-            save.Append(ent.Value.y);
+            foreach (var pos in ent.Value) {
+                // Save positions as a fixed-point integer (10000× scale) to hopefully prevent floating-point/string-culture jank.
+                save.Append((int)(pos.x * 10000f));
+                save.Append(",");
+                save.Append((int)(pos.y * 10000f));
+                save.Append(";");
+            }
             save.Append(")");
         }
         return $"{orig(self)}{save}<rgA>";
@@ -330,7 +345,7 @@ sealed class Plugin : BaseUnityPlugin
 
         RegionData data = regions.GetValue(self, _ => new());
 
-        data.entPositions.Clear();
+        data.chunkPositions.Clear();
 
         for (int k = 0; k < self.world.NumberOfRooms; k++) {
             AbstractRoom abstractRoom = self.world.GetAbstractRoom(self.world.firstRoomIndex + k);
@@ -338,10 +353,10 @@ sealed class Plugin : BaseUnityPlugin
                 continue;
             }
             foreach (var apo in abstractRoom.entities.OfType<AbstractPhysicalObject>()) {
-                if (apo.realizedObject != null)
-                    data.entPositions[apo.ID.number] = IntVector2.FromVector2(apo.realizedObject.firstChunk.pos);
+                if (apo.realizedObject != null && apo.realizedObject.bodyChunks.Length > 0)
+                    data.chunkPositions[apo.ID.number] = apo.realizedObject.bodyChunks.Select(b => b.pos).ToArray();
                 else
-                    data.entPositions[apo.ID.number] = new(apo.pos.x * 20 + 10, apo.pos.y * 20 + 10);
+                    data.chunkPositions[apo.ID.number] = new Vector2[] { new(apo.pos.x * 20 + 10, apo.pos.y * 20 + 10) };
             }
         }
     }
@@ -349,8 +364,8 @@ sealed class Plugin : BaseUnityPlugin
     private void AbstractPhysicalObject_RealizeInRoom(On.AbstractPhysicalObject.orig_RealizeInRoom orig, AbstractPhysicalObject self)
     {
         // Use a UAD to set positions because, for whatever reason, items are hard-set to the player's head chunk after a few ticks.
-        if (self.Room.shelter && regions.GetOrCreateValue(self.world.regionState).entPositions.TryGetValue(self.ID.number, out var pos)) {
-            self.Room.realizedRoom?.AddObject(new PositionSetter { o = self, pos = pos.ToVector2() });
+        if (self.Room.shelter && regions.GetOrCreateValue(self.world.regionState).chunkPositions.TryGetValue(self.ID.number, out var pos)) {
+            self.Room.realizedRoom?.AddObject(new PositionSetter { o = self, positions = pos });
         }
         orig(self);
     }
