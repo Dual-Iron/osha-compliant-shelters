@@ -1,8 +1,12 @@
 ﻿using BepInEx;
+using HUD;
 using RWCustom;
+using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Security.Permissions;
+using System.Text;
 using UnityEngine;
 
 // Allows access to private members
@@ -17,24 +21,43 @@ sealed class Plugin : BaseUnityPlugin
 {
     const int startSleep = 20;
 
-    sealed class PlayerData { public int sleepTime; }
+    sealed class PlayerData { public int sleepTime; public bool forceSleep; }
+    sealed class RegionData { public readonly Dictionary<int, IntVector2> entPositions = new(); };
 
-    readonly ConditionalWeakTable<Player, PlayerData> players = new();
+    static readonly ConditionalWeakTable<Player, PlayerData> players = new();
+    static readonly ConditionalWeakTable<RegionState, RegionData> regions = new();
 
-    PlayerData Data(Player p) => players.GetValue(p, _ => new());
+    static PlayerData Data(Player p) => players.GetValue(p, _ => new());
 
-    int MaxSleepTime(Player p)
+    static bool SlowSleep(Player self)
     {
-        return startSleep + (p.forceSleepCounter > 0
+        if (self.room?.game.session is not StoryGameSession sess) return false;
+
+        bool willStarve = !sess.saveState.malnourished && self.FoodInRoom(self.room, false) > 0 && self.FoodInRoom(self.room, false) < sess.characterStats.foodToHibernate;
+        bool pupDanger = ModManager.MSC && self.room.game.cameras[0].hud.foodMeter.pupBars.Any(PupWarning);
+
+        return willStarve || pupDanger;
+
+        static bool PupWarning(FoodMeter m)
+        {
+            if (m.PupHasDied) {
+                return false;
+            }
+            return m.abstractPup.Room != m.abstractPup.Room || m.PupInDanger || m.CurrentPupFood < m.survivalLimit;
+        }
+    }
+    static int MaxSleepTime(Player p)
+    {
+        return startSleep + (SlowSleep(p)
             ? Mathf.Max(260, Mathf.CeilToInt(Options.SleepTime.Value * 80))
             : Mathf.CeilToInt(Options.SleepTime.Value * 40));
     }
 
-    float MinSleepPercent(RainWorldGame game)
+    static float MinSleepPercent(RainWorldGame game)
     {
         return game.PlayersToProgressOrWin.Min(c => c.realizedCreature is Player p ? SleepPercent(p) : 0);
     }
-    float SleepPercent(Player self)
+    static float SleepPercent(Player self)
     {
         return Mathf.Clamp01(1f * (Data(self).sleepTime - startSleep) / (MaxSleepTime(self) - startSleep));
     }
@@ -43,6 +66,7 @@ sealed class Plugin : BaseUnityPlugin
     {
         On.RainWorld.OnModsInit += RainWorld_OnModsInit;
 
+        On.Player.ctor += Player_ctor;
         On.Player.JollyUpdate += UpdateSleep;
         On.Player.Update += FixForceSleep;
         On.ShelterDoor.Close += UpdateClose;
@@ -50,9 +74,16 @@ sealed class Plugin : BaseUnityPlugin
         On.HUD.FoodMeter.GameUpdate += FoodMeter_GameUpdate; // Fix line sprite jittering when it shouldn't
         On.HUD.FoodMeter.MeterCircle.Update += FoodMeter_Update; // Fix HUD flashing red when not trying to sleep
 
+        On.ShelterDoor.DestroyExcessiveObjects += SaveExtraObjects;
         On.ShelterDoor.Update += EjectStuck;
         On.ShortcutHandler.SpitOutCreature += ForbidEntry;
         On.ShortcutHandler.VesselAllowedInRoom += ForbidEntryAgain;
+
+        // Have to store positions manually (instead of relying on vanilla) because vanilla doesn't save per-chunk pos
+        On.RegionState.ctor += LoadPositions;
+        On.RegionState.SaveToString += SavePositions;
+        On.RegionState.AdaptRegionStateToWorld += UpdateRegionState;
+        On.AbstractPhysicalObject.RealizeInRoom += AbstractPhysicalObject_RealizeInRoom;
     }
 
     private void RainWorld_OnModsInit(On.RainWorld.orig_OnModsInit orig, RainWorld self)
@@ -60,6 +91,18 @@ sealed class Plugin : BaseUnityPlugin
         orig(self);
 
         MachineConnector.SetRegisteredOI("osha-shelters", new Options());
+    }
+
+    private void Player_ctor(On.Player.orig_ctor orig, Player self, AbstractCreature abstractCreature, World world)
+    {
+        orig(self, abstractCreature, world);
+
+        // Fix sleep counter with dead/small creatures
+        AbstractRoom room = world.GetAbstractRoom(abstractCreature.pos.room);
+        if (self.sleepCounter == 0 && room.shelter && room.creatures.All(c => c.state.dead || c.creatureTemplate.smallCreature 
+        || c.creatureTemplate.type == CreatureTemplate.Type.Slugcat || c.creatureTemplate.type == MoreSlugcats.MoreSlugcatsEnums.CreatureTemplateType.SlugNPC)) {
+            self.sleepCounter = 100;
+        }
     }
 
     private void UpdateSleep(On.Player.orig_JollyUpdate orig, Player self, bool eu)
@@ -86,9 +129,10 @@ sealed class Plugin : BaseUnityPlugin
         Player.InputPackage i = self.input[0];
 
         bool x = i.x == 0 || self.IsTileSolid(1, i.x, 0) && (!self.IsTileSolid(1, -1, -1) || !self.IsTileSolid(1, 1, -1));
-        bool anim = self.bodyMode == Player.BodyModeIndex.Default || self.bodyMode == Player.BodyModeIndex.Crawl || self.bodyMode == Player.BodyModeIndex.ZeroG;
+        bool anim = self.bodyMode == Player.BodyModeIndex.Default || self.bodyMode == Player.BodyModeIndex.Crawl || self.bodyMode == Player.BodyModeIndex.ZeroG
+            || self.bodyMode == Player.BodyModeIndex.ClimbingOnBeam && self.room.gravity < 0.1f;
 
-        if (i.y < 0 && x && anim && !i.jmp && !i.thrw && !i.pckp && self.IsTileSolid(1, 0, -1)) {
+        if (i.y < 0 && x && anim && !i.jmp && !i.thrw && !i.pckp && (self.IsTileSolid(0, 1, -1) || self.IsTileSolid(1, 0, -1))) {
             sleepTime++;
 
             self.emoteSleepCounter = 0;
@@ -102,21 +146,29 @@ sealed class Plugin : BaseUnityPlugin
         if (sleepTime >= MaxSleepTime(self)) {
             self.room.shelterDoor.Close();
         }
+
+        ref bool forceSleep = ref Data(self).forceSleep;
+        if (self.Stunned) {
+            forceSleep = false;
+            self.sleepCounter = 0;
+        }
+        if (forceSleep) {
+            self.sleepCounter = -24;
+            self.sleepCurlUp = 1;
+        }
     }
 
     private void FixForceSleep(On.Player.orig_Update orig, Player self, bool eu)
     {
         orig(self, eu);
-        if (self.room?.game.session is not StoryGameSession) {
-            return;
+        if (self.room?.game.session is StoryGameSession) {
+            int time = Data(self).sleepTime;
+            if (time > 0 && SlowSleep(self))
+                self.forceSleepCounter = Mathf.CeilToInt(259 * MinSleepPercent(self.room.game)); // 260 softlocks the player, so leave it at 259
+            else
+                self.forceSleepCounter = 0;
         }
-        int time = Data(self).sleepTime;
-        if (self.forceSleepCounter > 0 && time > 0)
-            self.forceSleepCounter = Mathf.CeilToInt(259 * MinSleepPercent(self.room.game)); // 260 softlocks the player, so leave it at 259
-        else
-            self.forceSleepCounter = 0;
     }
-
     private void UpdateClose(On.ShelterDoor.orig_Close orig, ShelterDoor self)
     {
         if (!self.room.game.IsStorySession) {
@@ -152,10 +204,8 @@ sealed class Plugin : BaseUnityPlugin
         foreach (Player plr in relevantPlayers) {
             plr.readyForWin = false;
             plr.ReadyForWinJolly = false;
-
-            if (self.closeSpeed > 0) {
-                plr.sleepCounter = -24;
-            }
+            if (self.closeSpeed > 0)
+                Data(plr).forceSleep = true;
         }
     }
 
@@ -176,6 +226,13 @@ sealed class Plugin : BaseUnityPlugin
         orig(self);
         if (self.meter.hud.owner is Player p2) {
             p2.stillInStartShelter = false;
+        }
+    }
+
+    private void SaveExtraObjects(On.ShelterDoor.orig_DestroyExcessiveObjects orig, ShelterDoor self)
+    {
+        if (!Options.SaveExcess.Value) {
+            orig(self);
         }
     }
 
@@ -219,5 +276,82 @@ sealed class Plugin : BaseUnityPlugin
     private bool ForbidEntryAgain(On.ShortcutHandler.orig_VesselAllowedInRoom orig, ShortcutHandler self, ShortcutHandler.Vessel vessel)
     {
         return orig(self, vessel) && !(vessel.room.realizedRoom?.shelterDoor != null && vessel.room.realizedRoom.shelterDoor.Closed > 0);
+    }
+
+    private void LoadPositions(On.RegionState.orig_ctor orig, RegionState self, SaveState saveState, World world)
+    {
+        orig(self, saveState, world);
+
+        RegionData data = regions.GetValue(self, _ => new());
+
+        for (int s = self.unrecognizedSaveStrings.Count - 1; s >= 0; s--) {
+            string[] split = self.unrecognizedSaveStrings[s].Split(new string[] { "<rgB>" }, 0);
+
+            if (split[0] != "ENTITYPOSITIONS") {
+                continue;
+            }
+
+            self.unrecognizedSaveStrings.RemoveAt(s);
+
+            string[] entries = split[1].Split(new char[] { ')' }, System.StringSplitOptions.RemoveEmptyEntries);
+
+            foreach (string entry in entries) {
+                string[] entrySplit = entry.Split('(');
+
+                if (!int.TryParse(entrySplit[0], out int id)) {
+                    Logger.LogWarning($"Saved ID was not an int: {entrySplit[0]}");
+                    continue;
+                }
+
+                string[] xy = entrySplit[1].Split(',');
+
+                data.entPositions[id] = new(int.Parse(xy[0]), int.Parse(xy[1]));
+            }
+        }
+    }
+
+    private string SavePositions(On.RegionState.orig_SaveToString orig, RegionState self)
+    {
+        StringBuilder save = new("ENTITYPOSITIONS<rgB>");
+        foreach (var ent in regions.GetValue(self, _ => new()).entPositions) {
+            save.Append(ent.Key);
+            save.Append("(");
+            save.Append(ent.Value.x);
+            save.Append(",");
+            save.Append(ent.Value.y);
+            save.Append(")");
+        }
+        return $"{orig(self)}{save}<rgA>";
+    }
+
+    private void UpdateRegionState(On.RegionState.orig_AdaptRegionStateToWorld orig, RegionState self, int playerShelter, int activeGate)
+    {
+        orig(self, playerShelter, activeGate);
+
+        RegionData data = regions.GetValue(self, _ => new());
+
+        data.entPositions.Clear();
+
+        for (int k = 0; k < self.world.NumberOfRooms; k++) {
+            AbstractRoom abstractRoom = self.world.GetAbstractRoom(self.world.firstRoomIndex + k);
+            if (!abstractRoom.shelter) {
+                continue;
+            }
+            foreach (var apo in abstractRoom.entities.OfType<AbstractPhysicalObject>()) {
+                if (apo.realizedObject != null)
+                    data.entPositions[apo.ID.number] = IntVector2.FromVector2(apo.realizedObject.firstChunk.pos);
+                else
+                    data.entPositions[apo.ID.number] = new(apo.pos.x * 20 + 10, apo.pos.y * 20 + 10);
+            }
+        }
+    }
+
+    private void AbstractPhysicalObject_RealizeInRoom(On.AbstractPhysicalObject.orig_RealizeInRoom orig, AbstractPhysicalObject self)
+    {
+        // Use a UAD to set positions because, for whatever reason, items are hard-set to the player's head chunk after a few ticks.
+        if (self.Room.shelter && regions.GetOrCreateValue(self.world.regionState).entPositions.TryGetValue(self.ID.number, out var pos)) {
+            self.Room.realizedRoom?.AddObject(new PositionSetter { o = self, pos = pos.ToVector2() });
+        }
+        orig(self);
     }
 }
