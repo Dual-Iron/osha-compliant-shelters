@@ -16,7 +16,7 @@ using UnityEngine;
 
 namespace OshaShelters;
 
-[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.0")]
+[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.1")]
 sealed class Plugin : BaseUnityPlugin
 {
     const int startSleep = 20;
@@ -129,7 +129,10 @@ sealed class Plugin : BaseUnityPlugin
         Player.InputPackage i = self.input[0];
 
         bool x = i.x == 0 || self.IsTileSolid(1, i.x, 0) && (!self.IsTileSolid(1, -1, -1) || !self.IsTileSolid(1, 1, -1));
-        bool anim = self.bodyMode == Player.BodyModeIndex.Default || self.bodyMode == Player.BodyModeIndex.Crawl || self.bodyMode == Player.BodyModeIndex.ZeroG
+        bool anim = self.bodyMode == Player.BodyModeIndex.Default
+            || self.bodyMode == Player.BodyModeIndex.CorridorClimb
+            || self.bodyMode == Player.BodyModeIndex.Crawl
+            || self.bodyMode == Player.BodyModeIndex.ZeroG
             || self.bodyMode == Player.BodyModeIndex.ClimbingOnBeam && self.room.gravity < 0.1f;
 
         if (i.y < 0 && x && anim && !i.jmp && !i.thrw && !i.pckp && (self.IsTileSolid(0, 1, -1) || self.IsTileSolid(1, 0, -1))) {
