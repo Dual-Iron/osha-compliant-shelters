@@ -3,7 +3,7 @@
   "name": "OSHA Compliant Shelters",
   "version": "1.0.0",
   "authors": "Dual",
-  "description": "Prevents shelters from closing until you hold DOWN to sleep. Also frees items from the shelter door and shoves creatures back outside if they try to invade while the door is closing.<LINE><LINE>Code at github.com/Dual-Iron/osha-compliant-shelters",
+  "description": "Prevents shelters from closing until you hold DOWN to sleep.<LINE>Frees items from the shelter door.<LINE>Shoves invading creatures back outside while the door is closing.<LINE>Saves the positions of each creature and item in shelters.<LINE><LINE>Code at github.com/Dual-Iron/osha-compliant-shelters",
   "requirements": [],
   "requirements_names": [],
   "checksum_override_version": false
