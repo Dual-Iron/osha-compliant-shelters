@@ -16,7 +16,7 @@ using UnityEngine;
 
 namespace OshaShelters;
 
-[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.2")]
+[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.3")]
 sealed class Plugin : BaseUnityPlugin
 {
     const int startSleep = 20;
@@ -251,14 +251,23 @@ sealed class Plugin : BaseUnityPlugin
         }
 
         // When the door closes...
-        IntVector2 shortcutPos = self.room.LocalCoordinateOfNode(0).Tile;
         Vector2 depositPos = self.room.MiddleOfTile(self.room.LocalCoordinateOfNode(0)) + self.dir * 110;
 
         foreach (PhysicalObject obj in self.room.physicalObjects.SelectMany(p => p).ToList()) {
             // Shove creatures still in the entrance back through
-            if (obj is Creature crit && crit.bodyChunks.Any(c => self.room.GetTilePosition(c.pos) == shortcutPos)) {
-                crit.SuckedIntoShortCut(shortcutPos, false);
-                continue;
+            if (obj is Creature crit) {
+                bool cont = false;
+                foreach (BodyChunk chunk in crit.bodyChunks) {
+                    Room.Tile tile = self.room.GetTile(chunk.pos);
+                    IntVector2 tilePos = new(tile.X, tile.Y);
+                    if (tile.Terrain == Room.Tile.TerrainType.ShortcutEntrance && self.room.WhichRoomDoesThisExitLeadTo(self.room.shortcutData(tilePos).DestTile) != null) {
+                        Logger.LogDebug($"Shoving {crit.Template.type} ({crit.abstractPhysicalObject.ID.number}) out of shelter");
+                        crit.SuckedIntoShortCut(tilePos, false);
+                        cont = true;
+                        break;
+                    }
+                }
+                if (cont) continue;
             }
             // Shove everything else INTO the shelter
             foreach (var c in obj.bodyChunks) {
