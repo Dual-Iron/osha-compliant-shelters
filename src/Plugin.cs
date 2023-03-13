@@ -16,7 +16,7 @@ using UnityEngine;
 
 namespace OshaShelters;
 
-[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.3")]
+[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.4")]
 sealed class Plugin : BaseUnityPlugin
 {
     const int startSleep = 20;
@@ -61,6 +61,10 @@ sealed class Plugin : BaseUnityPlugin
     {
         return Mathf.Clamp01(1f * (Data(self).sleepTime - startSleep) / (MaxSleepTime(self) - startSleep));
     }
+    static bool SafePos(ShelterDoor door, IntVector2 tile)
+    {
+        return ShelterDoor.CoordInsideShelterRange(tile, door.isAncient) && (door.isAncient || !door.closeTiles.Contains(tile));
+    }
 
     public void OnEnable()
     {
@@ -69,7 +73,7 @@ sealed class Plugin : BaseUnityPlugin
         On.Player.ctor += Player_ctor;
         On.Player.JollyUpdate += UpdateSleep;
         On.Player.Update += FixForceSleep;
-        On.ShelterDoor.Close += UpdateClose;
+        On.ShelterDoor.Close += FixClose;
 
         On.HUD.FoodMeter.GameUpdate += FoodMeter_GameUpdate; // Fix line sprite jittering when it shouldn't
         On.HUD.FoodMeter.MeterCircle.Update += FoodMeter_Update; // Fix HUD flashing red when not trying to sleep
@@ -131,7 +135,8 @@ sealed class Plugin : BaseUnityPlugin
         if (self.Stunned || self.room?.game.session is not StoryGameSession sess || !self.room.abstractRoom.shelter || self.room.shelterDoor == null
             || self.room.shelterDoor.Broken
             || self.room.shelterDoor.closedFac != 0 && self.room.shelterDoor.closeSpeed < 0 // shelter still opening
-            || !ShelterDoor.CoordInsideShelterRange(self.abstractCreature.pos.Tile, self.room.shelterDoor.isAncient)
+            || !SafePos(self.room.shelterDoor, self.room.GetTilePosition(self.bodyChunks[0].pos))
+            || !SafePos(self.room.shelterDoor, self.room.GetTilePosition(self.bodyChunks[1].pos))
             || self.FoodInRoom(self.room, eatAndDestroy: false) < 1
             || self.FoodInRoom(self.room, eatAndDestroy: false) < sess.characterStats.maxFood && sess.characterStats.malnourished
             ) {
@@ -141,14 +146,17 @@ sealed class Plugin : BaseUnityPlugin
 
         Player.InputPackage i = self.input[0];
 
-        bool x = i.x == 0 || self.IsTileSolid(1, i.x, 0) && (!self.IsTileSolid(1, -1, -1) || !self.IsTileSolid(1, 1, -1));
+        // Allow snuggling against walls
+        bool x = i.x == 0 || self.IsTileSolid(0, i.x, 0) && (!self.IsTileSolid(0, -1, 0) || !self.IsTileSolid(0, 1, 0));
         bool anim = self.bodyMode == Player.BodyModeIndex.Default
             || self.bodyMode == Player.BodyModeIndex.CorridorClimb
+            || self.bodyMode == Player.BodyModeIndex.WallClimb
             || self.bodyMode == Player.BodyModeIndex.Crawl
             || self.bodyMode == Player.BodyModeIndex.ZeroG
             || self.bodyMode == Player.BodyModeIndex.ClimbingOnBeam && self.room.gravity < 0.1f;
-
-        if (i.y < 0 && x && anim && !i.jmp && !i.thrw && !i.pckp && (self.IsTileSolid(0, 1, -1) || self.IsTileSolid(1, 0, -1))) {
+        bool floor = self.bodyMode == Player.BodyModeIndex.Default || self.IsTileSolid(0, 0, -1) || self.IsTileSolid(1, 0, -1);
+            
+        if (i.y < 0 && x && anim && !i.jmp && !i.thrw && !i.pckp && floor) {
             sleepTime++;
 
             self.emoteSleepCounter = 0;
@@ -159,7 +167,7 @@ sealed class Plugin : BaseUnityPlugin
         }
 
         // Close doors when ready (if-check is just an optimization)
-        if (sleepTime >= MaxSleepTime(self)) {
+        if (self.AI == null && sleepTime >= MaxSleepTime(self)) {
             self.room.shelterDoor.Close();
         }
     }
@@ -175,14 +183,10 @@ sealed class Plugin : BaseUnityPlugin
                 self.forceSleepCounter = 0;
         }
     }
-    private void UpdateClose(On.ShelterDoor.orig_Close orig, ShelterDoor self)
+    private void FixClose(On.ShelterDoor.orig_Close orig, ShelterDoor self)
     {
         if (!self.room.game.IsStorySession) {
             orig(self);
-            return;
-        }
-
-        if (self.room.game.PlayersToProgressOrWin.Any(p => !ShelterDoor.CoordInsideShelterRange(p.pos.Tile, self.isAncient))) {
             return;
         }
 
