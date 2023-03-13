@@ -4,8 +4,17 @@ namespace OshaShelters;
 
 sealed class PositionSetter : UpdatableAndDeletable
 {
-    public AbstractPhysicalObject o;
-    public Vector2[] positions;
+    readonly AbstractPhysicalObject target;
+    readonly Vector2[] chunks;
+
+    public PositionSetter(AbstractPhysicalObject target, Vector2[] chunks)
+    {
+        this.target = target;
+        this.chunks = chunks;
+        for (int i = 0; i < this.chunks.Length; i++) {
+            this.chunks[i] += RWCustom.Custom.RNV();
+        }
+    }
 
     int timer = 10;
     public override void Update(bool eu)
@@ -13,21 +22,17 @@ sealed class PositionSetter : UpdatableAndDeletable
         base.Update(eu);
 
         if (timer --> 0) {
-            o.pos.Tile = room.GetTilePosition(positions[0]);
+            target.pos.Tile = room.GetTilePosition(chunks[0]);
 
-            if (o.realizedObject == null) {
+            if (target.realizedObject == null) {
                 return;
             }
 
-            for (int i = 0; i < o.realizedObject.bodyChunks.Length; i++) {
-                Vector2 pos = i < positions.Length ? positions[i] : (positions[0] + RWCustom.Custom.RNV());
+            for (int i = 0; i < target.realizedObject.bodyChunks.Length; i++) {
+                Vector2 pos = i < chunks.Length ? chunks[i] : chunks[0] + RWCustom.Custom.RNV();
 
-                o.realizedObject.bodyChunks[i].HardSetPosition(pos);
-                o.realizedObject.bodyChunks[i].vel = Vector2.zero;
-            }
-
-            if (o.realizedObject is PlayerCarryableItem c) {
-                c.lastOutsideTerrainPos = positions[0];
+                target.realizedObject.bodyChunks[i].HardSetPosition(pos);
+                target.realizedObject.bodyChunks[i].vel = Vector2.zero;
             }
 
             return;

@@ -16,13 +16,18 @@ using UnityEngine;
 
 namespace OshaShelters;
 
-[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.4")]
+[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.5")]
 sealed class Plugin : BaseUnityPlugin
 {
     const int startSleep = 20;
 
     sealed class PlayerData { public int sleepTime; public bool forceSleep; }
-    sealed class RegionData { public readonly Dictionary<int, Vector2[]> chunkPositions = new(); };
+    sealed class RegionData { public readonly Dictionary<int, SavedPos> entities = new(); };
+    sealed class SavedPos
+    {
+        public Vector2[] chunks;
+        public string roomName;
+    }
 
     static readonly ConditionalWeakTable<Player, PlayerData> players = new();
     static readonly ConditionalWeakTable<RegionState, RegionData> regions = new();
@@ -316,21 +321,30 @@ sealed class Plugin : BaseUnityPlugin
 
             foreach (string entry in entries) {
                 string[] entrySplit = entry.Split('(');
+                string[] roomNameSplit = entrySplit[0].Split(':');
 
-                if (!int.TryParse(entrySplit[0], out int id)) {
-                    Logger.LogWarning($"Saved ID was not an int: {entrySplit[0]}");
+                if (roomNameSplit.Length < 2) {
+                    Logger.LogWarning($"Updating from 1.0.4, entity {entrySplit[0]} position lost");
                     continue;
                 }
 
-                string[] positions = entrySplit[1].Split(new char[] { ';' } ,StringSplitOptions.RemoveEmptyEntries);
+                if (!int.TryParse(roomNameSplit[0], out int id)) {
+                    Logger.LogWarning($"ID:roomname format was outdated or incorrect: {entrySplit[0]}");
+                    continue;
+                }
 
-                data.chunkPositions[id] = new Vector2[positions.Length];
+                string[] positions = entrySplit[1].Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+
+                data.entities[id] = new() {
+                    chunks = new Vector2[positions.Length],
+                    roomName = roomNameSplit[1]
+                };
 
                 for (int i = 0; i < positions.Length; i++) {
                     string[] xy = positions[i].Split(',');
                     
                     if (int.TryParse(xy[0], out int x) && int.TryParse(xy[1], out int y)) {
-                        data.chunkPositions[id][i] = new(x * 0.0001f, y * 0.0001f);
+                        data.entities[id].chunks[i] = new(x * 0.0001f, y * 0.0001f);
                     }
                     else {
                         Logger.LogWarning($"X and Y coordinate saved incorrectly: {positions[i]}");
@@ -343,10 +357,12 @@ sealed class Plugin : BaseUnityPlugin
     private string SavePositions(On.RegionState.orig_SaveToString orig, RegionState self)
     {
         StringBuilder save = new("ENTITYPOSITIONS<rgB>");
-        foreach (var ent in regions.GetValue(self, _ => new()).chunkPositions) {
+        foreach (var ent in regions.GetValue(self, _ => new()).entities) {
             save.Append(ent.Key);
+            save.Append(":");
+            save.Append(ent.Value.roomName);
             save.Append("(");
-            foreach (var pos in ent.Value) {
+            foreach (var pos in ent.Value.chunks) {
                 // Save positions as a fixed-point integer (10000× scale) to hopefully prevent floating-point/string-culture jank.
                 save.Append((int)(pos.x * 10000f));
                 save.Append(",");
@@ -364,18 +380,21 @@ sealed class Plugin : BaseUnityPlugin
 
         RegionData data = regions.GetValue(self, _ => new());
 
-        data.chunkPositions.Clear();
+        data.entities.Clear();
 
         for (int k = 0; k < self.world.NumberOfRooms; k++) {
-            AbstractRoom abstractRoom = self.world.GetAbstractRoom(self.world.firstRoomIndex + k);
-            if (!abstractRoom.shelter) {
+            AbstractRoom room = self.world.GetAbstractRoom(self.world.firstRoomIndex + k);
+            if (!room.shelter) {
                 continue;
             }
-            foreach (var apo in abstractRoom.entities.OfType<AbstractPhysicalObject>()) {
-                if (apo.realizedObject != null && apo.realizedObject.bodyChunks.Length > 0)
-                    data.chunkPositions[apo.ID.number] = apo.realizedObject.bodyChunks.Select(b => b.pos).ToArray();
-                else
-                    data.chunkPositions[apo.ID.number] = new Vector2[] { new(apo.pos.x * 20 + 10, apo.pos.y * 20 + 10) };
+            foreach (var apo in room.entities.OfType<AbstractPhysicalObject>()) {
+                data.entities[apo.ID.number] = new() { roomName = room.name };
+                if (apo.realizedObject != null && apo.realizedObject.bodyChunks.Length > 0) {
+                    data.entities[apo.ID.number].chunks = apo.realizedObject.bodyChunks.Select(b => b.pos).ToArray();
+                }
+                else if (!data.entities.ContainsKey(apo.ID.number)) {
+                    data.entities[apo.ID.number].chunks = new Vector2[] { new(apo.pos.x * 20 + 10, apo.pos.y * 20 + 10) };
+                }
             }
         }
     }
@@ -383,8 +402,11 @@ sealed class Plugin : BaseUnityPlugin
     private void AbstractPhysicalObject_RealizeInRoom(On.AbstractPhysicalObject.orig_RealizeInRoom orig, AbstractPhysicalObject self)
     {
         // Use a UAD to set positions because, for whatever reason, items are hard-set to the player's head chunk after a few ticks.
-        if (self.Room.shelter && regions.GetOrCreateValue(self.world.regionState).chunkPositions.TryGetValue(self.ID.number, out var pos)) {
-            self.Room.realizedRoom?.AddObject(new PositionSetter { o = self, positions = pos });
+        if (self.Room.shelter && regions.GetOrCreateValue(self.world.regionState).entities.TryGetValue(self.ID.number, out var pos)) {
+            if (pos.roomName == self.Room.name)
+                self.Room.realizedRoom?.AddObject(new PositionSetter(self, pos.chunks));
+            else
+                Logger.LogWarning($"Saved object {(self is AbstractCreature c ? c.creatureTemplate.type.value : self.type.value)} ({self.ID.number}) moved from {pos.roomName} to {self.Room.name}");
         }
         orig(self);
     }
