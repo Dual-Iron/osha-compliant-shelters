@@ -16,7 +16,7 @@ using UnityEngine;
 
 namespace OshaShelters;
 
-[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.6")]
+[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.7")]
 sealed class Plugin : BaseUnityPlugin
 {
     const int startSleep = 20;
@@ -122,13 +122,16 @@ sealed class Plugin : BaseUnityPlugin
         if (self.AI != null && self.grabbedBy.Count > 0 && self.grabbedBy.Any(c => c.grabber is Player p && Data(p).forceSleep)) {
             forceSleep = true;
         }
-        if (self.Stunned) {
-            forceSleep = false;
-            self.sleepCounter = 0;
-        }
         if (forceSleep) {
-            self.sleepCounter = -24;
-            self.sleepCurlUp = 1;
+            if (self.Stunned) {
+                forceSleep = false;
+                self.sleepCounter = 0;
+                self.sleepCurlUp = 0;
+            }
+            else {
+                self.sleepCounter = -24;
+                self.sleepCurlUp = 1;
+            }
         }
 
         // Not needed anymore
