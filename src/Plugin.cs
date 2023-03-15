@@ -16,7 +16,7 @@ using UnityEngine;
 
 namespace OshaShelters;
 
-[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.5")]
+[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.6")]
 sealed class Plugin : BaseUnityPlugin
 {
     const int startSleep = 20;
@@ -388,12 +388,17 @@ sealed class Plugin : BaseUnityPlugin
                 continue;
             }
             foreach (var apo in room.entities.OfType<AbstractPhysicalObject>()) {
-                data.entities[apo.ID.number] = new() { roomName = room.name };
                 if (apo.realizedObject != null && apo.realizedObject.bodyChunks.Length > 0) {
-                    data.entities[apo.ID.number].chunks = apo.realizedObject.bodyChunks.Select(b => b.pos).ToArray();
+                    data.entities[apo.ID.number] = new SavedPos() {
+                        roomName = room.name,
+                        chunks = apo.realizedObject.bodyChunks.Select(b => b.pos).ToArray()
+                    };
                 }
                 else if (!data.entities.ContainsKey(apo.ID.number)) {
-                    data.entities[apo.ID.number].chunks = new Vector2[] { new(apo.pos.x * 20 + 10, apo.pos.y * 20 + 10) };
+                    data.entities[apo.ID.number] = new SavedPos() {
+                        roomName = room.name,
+                        chunks = new Vector2[] { new(apo.pos.x * 20 + 10, apo.pos.y * 20 + 10) }
+                    };
                 }
             }
         }
