@@ -16,12 +16,12 @@ using UnityEngine;
 
 namespace OshaShelters;
 
-[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.7")]
+[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.8")]
 sealed class Plugin : BaseUnityPlugin
 {
     const int startSleep = 20;
 
-    sealed class PlayerData { public int sleepTime; public bool forceSleep; }
+    sealed class PlayerData { public int sleepTime; }
     sealed class RegionData { public readonly Dictionary<int, SavedPos> entities = new(); };
     sealed class SavedPos
     {
@@ -118,22 +118,6 @@ sealed class Plugin : BaseUnityPlugin
     {
         orig(self, eu);
 
-        ref bool forceSleep = ref Data(self).forceSleep;
-        if (self.AI != null && self.grabbedBy.Count > 0 && self.grabbedBy.Any(c => c.grabber is Player p && Data(p).forceSleep)) {
-            forceSleep = true;
-        }
-        if (forceSleep) {
-            if (self.Stunned) {
-                forceSleep = false;
-                self.sleepCounter = 0;
-                self.sleepCurlUp = 0;
-            }
-            else {
-                self.sleepCounter = -24;
-                self.sleepCurlUp = 1;
-            }
-        }
-
         // Not needed anymore
         self.stillInStartShelter = false;
 
@@ -222,8 +206,6 @@ sealed class Plugin : BaseUnityPlugin
         foreach (Player plr in relevantPlayers) {
             plr.readyForWin = false;
             plr.ReadyForWinJolly = false;
-            if (self.closeSpeed > 0)
-                Data(plr).forceSleep = true;
         }
     }
 
