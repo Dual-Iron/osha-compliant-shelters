@@ -16,7 +16,7 @@ using UnityEngine;
 
 namespace OshaShelters;
 
-[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.8")]
+[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.9")]
 sealed class Plugin : BaseUnityPlugin
 {
     const int startSleep = 20;
@@ -139,20 +139,25 @@ sealed class Plugin : BaseUnityPlugin
         Player.InputPackage i = self.input[0];
 
         // Allow snuggling against walls
+        bool y = i.y < 0 && !i.jmp || Options.HoldJump.Value && i.y == 0 && self.input.Take(10).All(inp => inp.jmp);
         bool x = i.x == 0 || self.IsTileSolid(0, i.x, 0) && (!self.IsTileSolid(0, -1, 0) || !self.IsTileSolid(0, 1, 0));
-        bool anim = self.bodyMode == Player.BodyModeIndex.Default
+        bool anim = i.jmp || self.bodyMode == Player.BodyModeIndex.Default
             || self.bodyMode == Player.BodyModeIndex.CorridorClimb
             || self.bodyMode == Player.BodyModeIndex.WallClimb
             || self.bodyMode == Player.BodyModeIndex.Crawl
             || self.bodyMode == Player.BodyModeIndex.ZeroG
             || self.bodyMode == Player.BodyModeIndex.ClimbingOnBeam && self.room.gravity < 0.1f;
-        bool floor = self.bodyMode == Player.BodyModeIndex.Default || self.IsTileSolid(0, 0, -1) || self.IsTileSolid(1, 0, -1);
-            
-        if (i.y < 0 && x && anim && !i.jmp && !i.thrw && !i.pckp && floor) {
+        bool floor = self.bodyMode == Player.BodyModeIndex.Default || i.jmp || self.IsTileSolid(0, 0, -1) || self.IsTileSolid(1, 0, -1);
+
+        if (y && x && anim && !i.thrw && !i.pckp && floor) {
             sleepTime++;
 
             self.emoteSleepCounter = 0;
             self.sleepCurlUp = SleepPercent(self);
+            self.superLaunchJump = 0;
+            if (self.bodyMode == Player.BodyModeIndex.Stand && self.animation == Player.AnimationIndex.None) {
+                self.standing = false;
+            }
         }
         else {
             sleepTime = 0;
@@ -182,7 +187,7 @@ sealed class Plugin : BaseUnityPlugin
             return;
         }
 
-        var relevantPlayers = self.room.game.PlayersToProgressOrWin.Select(p => p.realizedObject).OfType<Player>().Where(p => p != null && p.room == self.room && !p.dead);
+        var relevantPlayers = self.room.game.PlayersToProgressOrWin.Select(p => p.realizedObject).OfType<Player>().Where(p => p != null && p.room == self.room && !p.dead && p.onBack == null);
 
         bool any = false;
         foreach (Player plr in relevantPlayers) {
