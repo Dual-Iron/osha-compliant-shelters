@@ -16,12 +16,12 @@ using UnityEngine;
 
 namespace OshaShelters;
 
-[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.9")]
-sealed class Plugin : BaseUnityPlugin
+[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.10")]
+sealed partial class Plugin : BaseUnityPlugin
 {
     const int startSleep = 20;
 
-    sealed class PlayerData { public int sleepTime; }
+    sealed class PlayerData { public int sleepTime; public bool sleeping; }
     sealed class RegionData { public readonly Dictionary<int, SavedPos> entities = new(); };
     sealed class SavedPos
     {
@@ -93,6 +93,8 @@ sealed class Plugin : BaseUnityPlugin
         On.RegionState.SaveToString += SavePositions;
         On.RegionState.AdaptRegionStateToWorld += UpdateRegionState;
         On.AbstractPhysicalObject.RealizeInRoom += AbstractPhysicalObject_RealizeInRoom;
+
+        EnableRegionKit(); // Plugin.RK.cs
     }
 
     private void RainWorld_OnModsInit(On.RainWorld.orig_OnModsInit orig, RainWorld self)
@@ -109,7 +111,7 @@ sealed class Plugin : BaseUnityPlugin
         // Fix sleep counter with dead/small creatures
         AbstractRoom room = world.GetAbstractRoom(abstractCreature.pos.room);
         if (self.sleepCounter == 0 && room.shelter && room.creatures.All(c => c.state.dead || c.creatureTemplate.smallCreature 
-        || c.creatureTemplate.type == CreatureTemplate.Type.Slugcat || c.creatureTemplate.type == MoreSlugcats.MoreSlugcatsEnums.CreatureTemplateType.SlugNPC)) {
+            || c.creatureTemplate.type == CreatureTemplate.Type.Slugcat || c.creatureTemplate.type == MoreSlugcats.MoreSlugcatsEnums.CreatureTemplateType.SlugNPC)) {
             self.sleepCounter = 100;
         }
     }
@@ -117,6 +119,21 @@ sealed class Plugin : BaseUnityPlugin
     private void UpdateSleep(On.Player.orig_JollyUpdate orig, Player self, bool eu)
     {
         orig(self, eu);
+
+        ref bool sleeping = ref Data(self).sleeping;
+        if (self.AI != null && self.grabbedBy.Count > 0 && self.grabbedBy.Any(c => c.grabber is Player p && Data(p).sleeping)) {
+            sleeping = true;
+        }
+        if (sleeping) {
+            if (self.Stunned || self.mapInput.jmp) {
+                sleeping = false;
+                self.sleepCounter = self.Malnourished ? 40 : 17;
+            }
+            else {
+                self.sleepCounter = -24;
+                self.sleepCurlUp = 1;
+            }
+        }
 
         // Not needed anymore
         self.stillInStartShelter = false;
@@ -211,6 +228,10 @@ sealed class Plugin : BaseUnityPlugin
         foreach (Player plr in relevantPlayers) {
             plr.readyForWin = false;
             plr.ReadyForWinJolly = false;
+
+            if (self.closeSpeed > 0) {
+                Data(plr).sleeping = true;
+            }
         }
     }
 
@@ -254,7 +275,7 @@ sealed class Plugin : BaseUnityPlugin
 
         foreach (PhysicalObject obj in self.room.physicalObjects.SelectMany(p => p).ToList()) {
             // Shove creatures still in the entrance back through
-            if (obj is Creature crit) {
+            if (obj is Creature crit && (crit is Scavenger || ShelterDoor.IsThisHostileCreatureForShelter(crit.abstractCreature) || ShelterDoor.IsThisBigCreatureForShelter(crit.abstractCreature))) {
                 bool cont = false;
                 foreach (BodyChunk chunk in crit.bodyChunks) {
                     Room.Tile tile = self.room.GetTile(chunk.pos);
@@ -269,10 +290,12 @@ sealed class Plugin : BaseUnityPlugin
                 if (cont) continue;
             }
             // Shove everything else INTO the shelter
-            foreach (var c in obj.bodyChunks) {
-                if (self.room.GetTile(c.pos).Solid) {
-                    c.pos = depositPos;
-                    c.vel = self.dir * 5;
+            if (obj.grabbedBy.Count == 0) {
+                foreach (var c in obj.bodyChunks) {
+                    if (self.room.GetTile(c.pos).Solid && c.collideWithTerrain) {
+                        c.pos = depositPos;
+                        c.vel = self.dir * 5;
+                    }
                 }
             }
         }
