@@ -16,7 +16,7 @@ using UnityEngine;
 
 namespace OshaShelters;
 
-[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.11")]
+[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.12")]
 sealed partial class Plugin : BaseUnityPlugin
 {
     const int startSleep = 20;
@@ -92,8 +92,7 @@ sealed partial class Plugin : BaseUnityPlugin
 
         On.ShelterDoor.DestroyExcessiveObjects += SaveExtraObjects;
         On.ShelterDoor.Update += EjectStuck;
-        On.ShortcutHandler.SpitOutCreature += ForbidEntry;
-        On.ShortcutHandler.VesselAllowedInRoom += ForbidEntryAgain;
+        On.ShortcutHandler.VesselAllowedInRoom += ForbidEntry;
 
         // Have to store positions manually (instead of relying on vanilla) because vanilla doesn't save per-chunk pos
         On.RegionState.ctor += LoadPositions;
@@ -299,11 +298,14 @@ sealed partial class Plugin : BaseUnityPlugin
                 foreach (BodyChunk chunk in crit.bodyChunks) {
                     Room.Tile tile = self.room.GetTile(chunk.pos);
                     IntVector2 tilePos = new(tile.X, tile.Y);
-                    if (tile.Terrain == Room.Tile.TerrainType.ShortcutEntrance && self.room.WhichRoomDoesThisExitLeadTo(self.room.shortcutData(tilePos).DestTile) != null) {
-                        Logger.LogDebug($"Shoving {crit.Template.type} ({crit.abstractPhysicalObject.ID.number}) out of shelter");
-                        crit.SuckedIntoShortCut(tilePos, false);
-                        cont = true;
-                        break;
+                    if (tile.Terrain == Room.Tile.TerrainType.ShortcutEntrance) {
+                        var leadsTo = self.room.WhichRoomDoesThisExitLeadTo(self.room.shortcutData(tilePos).DestTile);
+                        if (leadsTo != null && leadsTo != self.room.abstractRoom) {
+                            Logger.LogDebug($"Shoving {crit.Template.type} ({crit.abstractPhysicalObject.ID.number}) out of shelter");
+                            crit.SuckedIntoShortCut(tilePos, false);
+                            cont = true;
+                            break;
+                        }
                     }
                 }
                 if (cont) continue;
@@ -320,18 +322,9 @@ sealed partial class Plugin : BaseUnityPlugin
         }
     }
 
-    private void ForbidEntry(On.ShortcutHandler.orig_SpitOutCreature orig, ShortcutHandler self, ShortcutHandler.ShortCutVessel vessel)
+    private bool ForbidEntry(On.ShortcutHandler.orig_VesselAllowedInRoom orig, ShortcutHandler self, ShortcutHandler.Vessel vessel)
     {
-        orig(self, vessel);
-
-        if (vessel.room.realizedRoom.shelterDoor != null && vessel.room.realizedRoom.shelterDoor.Closed > 0) {
-            self.SuckInCreature(vessel.creature, vessel.creature.room, vessel.creature.room.shortcutData(vessel.pos));
-        }
-    }
-
-    private bool ForbidEntryAgain(On.ShortcutHandler.orig_VesselAllowedInRoom orig, ShortcutHandler self, ShortcutHandler.Vessel vessel)
-    {
-        return orig(self, vessel) && !(vessel.room.realizedRoom?.shelterDoor != null && vessel.room.realizedRoom.shelterDoor.Closed > 0);
+        return orig(self, vessel) && !(vessel.room.realizedRoom?.shelterDoor?.Closed > 0);
     }
 
     private void LoadPositions(On.RegionState.orig_ctor orig, RegionState self, SaveState saveState, World world)
