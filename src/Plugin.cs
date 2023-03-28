@@ -16,7 +16,7 @@ using UnityEngine;
 
 namespace OshaShelters;
 
-[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.10")]
+[BepInPlugin("com.dual.osha-shelters", "OSHA Compliant Shelters", "1.0.11")]
 sealed partial class Plugin : BaseUnityPlugin
 {
     const int startSleep = 20;
@@ -60,11 +60,18 @@ sealed partial class Plugin : BaseUnityPlugin
 
     static float MinSleepPercent(RainWorldGame game)
     {
+        if (!game.PlayersToProgressOrWin.Any()) {
+            return 0;
+        }
         return game.PlayersToProgressOrWin.Min(c => c.realizedCreature is Player p ? SleepPercent(p) : 0);
     }
     static float SleepPercent(Player self)
     {
-        return Mathf.Clamp01(1f * (Data(self).sleepTime - startSleep) / (MaxSleepTime(self) - startSleep));
+        float sleepTime = Data(self).sleepTime;
+        if (sleepTime < startSleep) {
+            return 0;
+        }
+        return Mathf.Clamp01((sleepTime - startSleep) / (MaxSleepTime(self) - startSleep));
     }
     static bool SafePos(ShelterDoor door, IntVector2 tile)
     {
@@ -120,6 +127,10 @@ sealed partial class Plugin : BaseUnityPlugin
     {
         orig(self, eu);
 
+        if (!Options.HoldDown.Value) {
+            return;
+        }
+
         ref bool sleeping = ref Data(self).sleeping;
         if (self.AI != null && self.grabbedBy.Count > 0 && self.grabbedBy.Any(c => c.grabber is Player p && Data(p).sleeping)) {
             sleeping = true;
@@ -155,15 +166,9 @@ sealed partial class Plugin : BaseUnityPlugin
 
         Player.InputPackage i = self.input[0];
 
-        // Allow snuggling against walls
-        bool y = i.y < 0 && !i.jmp || Options.HoldJump.Value && i.y == 0 && self.input.Take(10).All(inp => inp.jmp);
+        bool y = i.y < 0 && !i.jmp || i.y == 0 && self.input.Take(10).All(inp => inp.jmp);
         bool x = i.x == 0 || self.IsTileSolid(0, i.x, 0) && (!self.IsTileSolid(0, -1, 0) || !self.IsTileSolid(0, 1, 0));
-        bool anim = i.jmp || self.bodyMode == Player.BodyModeIndex.Default
-            || self.bodyMode == Player.BodyModeIndex.CorridorClimb
-            || self.bodyMode == Player.BodyModeIndex.WallClimb
-            || self.bodyMode == Player.BodyModeIndex.Crawl
-            || self.bodyMode == Player.BodyModeIndex.ZeroG
-            || self.bodyMode == Player.BodyModeIndex.ClimbingOnBeam && self.room.gravity < 0.1f;
+        bool anim = i.jmp || self.bodyMode == Player.BodyModeIndex.WallClimb || self.bodyMode == Player.BodyModeIndex.Crawl || self.bodyMode == Player.BodyModeIndex.CorridorClimb;
         bool floor = self.bodyMode == Player.BodyModeIndex.Default || i.jmp || self.IsTileSolid(0, 0, -1) || self.IsTileSolid(1, 0, -1);
 
         if (y && x && anim && !i.thrw && !i.pckp && floor) {
@@ -189,7 +194,7 @@ sealed partial class Plugin : BaseUnityPlugin
     private void FixForceSleep(On.Player.orig_Update orig, Player self, bool eu)
     {
         orig(self, eu);
-        if (self.room?.game.session is StoryGameSession) {
+        if (self.room?.game.session is StoryGameSession && Options.HoldDown.Value) {
             int time = Data(self).sleepTime;
             if (time > 0 && SlowSleep(self))
                 self.forceSleepCounter = Mathf.CeilToInt(259 * MinSleepPercent(self.room.game)); // 260 softlocks the player, so leave it at 259
@@ -199,7 +204,7 @@ sealed partial class Plugin : BaseUnityPlugin
     }
     private void FixClose(On.ShelterDoor.orig_Close orig, ShelterDoor self)
     {
-        if (!self.room.game.IsStorySession) {
+        if (!self.room.game.IsStorySession || !Options.HoldDown.Value) {
             orig(self);
             return;
         }
@@ -235,17 +240,31 @@ sealed partial class Plugin : BaseUnityPlugin
         }
     }
 
-    private void FoodMeter_GameUpdate(On.HUD.FoodMeter.orig_GameUpdate orig, HUD.FoodMeter self)
+    private void FoodMeter_GameUpdate(On.HUD.FoodMeter.orig_GameUpdate orig, FoodMeter self)
     {
+        if (!Options.HoldDown.Value) {
+            orig(self);
+            return;
+        }
+
         Player owner = (Player)self.hud.owner;
         int y = owner.input[0].y;
-        owner.input[0].y = 0;
-        orig(self);
-        owner.input[0].y = y;
+        try {
+            owner.input[0].y = 0;
+            orig(self);
+        }
+        finally {
+            owner.input[0].y = y;
+        }
     }
 
-    private void FoodMeter_Update(On.HUD.FoodMeter.MeterCircle.orig_Update orig, HUD.FoodMeter.MeterCircle self)
+    private void FoodMeter_Update(On.HUD.FoodMeter.MeterCircle.orig_Update orig, FoodMeter.MeterCircle self)
     {
+        if (!Options.HoldDown.Value) {
+            orig(self);
+            return;
+        }
+
         if (self.meter.hud.owner is Player p) {
             p.stillInStartShelter = Data(p).sleepTime <= 0;
         }
